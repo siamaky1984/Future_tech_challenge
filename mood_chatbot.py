@@ -6,11 +6,23 @@ import json
 import base64
 from flask import Flask, render_template, request, jsonify, url_for
 
+from text_to_speech_openai import play_audio_file
+
+
+# Import our custom modules
+from mood_detector import MoodDetector
+from response_generator import ResponseGenerator
+
 # Initialize Flask app
 app = Flask(__name__)
 
 # Set your OpenAI API key
 API_KEY = ""
+
+# Initialize our mood detection and response generation systems
+mood_detector = MoodDetector(API_KEY)
+response_generator = ResponseGenerator(API_KEY)
+
 
 # Make sure static folder exists
 if not os.path.exists('static'):
@@ -18,50 +30,21 @@ if not os.path.exists('static'):
 
 # Initialize conversation history
 conversation_history = []
+mood_history = []
 
-# # Direct implementation of Whisper API
-def speech_to_text(audio_file_path):
+# Add this audio preprocessing function before sending to Whisper
+def preprocess_audio(input_file, output_file):
     try:
-        # API endpoint
-        url = "https://api.openai.com/v1/audio/transcriptions"
-        
-        # Headers with authorization
-        headers = {
-            "Authorization": f"Bearer {API_KEY}"
-        }
-        
-        # Prepare the file and form data
-        with open(audio_file_path, "rb") as audio_file:
-            files = {
-                "file": (os.path.basename(audio_file_path), audio_file, "audio/wav")
-            }
-            data = {
-                "model": "whisper-1",
-                # "model" : "gpt-4o-transcribe",
-                "language": "en",  # Specify the language if you know it
-            }
-            
-            print(f"Sending direct API request to Whisper API: {audio_file_path}")
-            
-            # Make the request
-            response = requests.post(url, headers=headers, files=files, data=data)
-            
-            # Check if successful
-            if response.status_code == 200:
-                result = response.json()
-                transcript = result.get("text", "")
-                print(f"Transcript received: {transcript}")
-                return transcript
-            else:
-                print(f"API error: {response.status_code}, {response.text}")
-                return f"Error: {response.status_code}"
-    
+        # Using ffmpeg (you'll need to install it)
+        os.system(f'ffmpeg -i {input_file} -ar 16000 -ac 1 -c:a pcm_s16le {output_file}')
+        return output_file
     except Exception as e:
-        print(f"Error in speech-to-text: {str(e)}")
-        return f"Error: {str(e)}"
+        print(f"Error preprocessing audio: {e}")
+        return input_file  # Return original if processing fails
 
 
-def speech_to_text_direct(audio_file_path, api_key):
+
+def speech_to_text(audio_file_path, api_key):
     """
     Directly call the OpenAI Whisper API without relying on SDK abstractions
     """
@@ -227,7 +210,7 @@ def text_to_speech(text, mood=None):
         
         # Prepare request data
         data = {
-            "model": "gpt-4o-mini-tts", # "tts-1",
+            "model": "tts-1", # "tts-1",
             "voice": voice,
             "input": text
         }
@@ -246,6 +229,13 @@ def text_to_speech(text, mood=None):
         else:
             print(f"TTS API error: {response.status_code}, {response.text}")
             return None
+        
+        # After saving the file, verify it exists and log the size
+        if os.path.exists(speech_file):
+            file_size = os.path.getsize(speech_file)
+            print(f"TTS file created successfully: {speech_file}, size: {file_size} bytes")
+        else:
+            print(f"TTS file was not created: {speech_file}")
     
     except Exception as e:
         print(f"Error in text-to-speech: {str(e)}")
@@ -288,23 +278,41 @@ def process_audio():
                 f.write(audio_bytes)
             print(f"Saved decoded base64 data to {temp_path}")
         
+        print('old temp_path', temp_path)
+        ### convert the temp file for the format of interest
+        output_path = './temp_upload_converted.wav'
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        temp_path = preprocess_audio( temp_path, output_path)
+        print('new temp path', temp_path)
+
         # Process the audio
-        # transcript = speech_to_text(temp_path)
-        transcript = speech_to_text_direct(temp_path, API_KEY)
+        transcript = speech_to_text(temp_path, API_KEY)
         print(f"Transcript: {transcript}")
         
         if transcript.startswith("Error:"):
             return jsonify({"error": transcript}), 500
         
         # Detect mood
-        mood = detect_mood(temp_path, transcript)
+        # mood = detect_mood(temp_path, transcript)
+        # print(f"Detected mood: {mood}")
+        
+        # Detect mood using our advanced mood detector
+        mood = mood_detector.detect_mood(temp_path, transcript)
         print(f"Detected mood: {mood}")
         
+        # Add mood to history
+        mood_history.append(mood)
+
         # Update conversation history
         current_exchange = {"user": transcript}
         
         # Generate response
-        response_text = generate_response(transcript, mood, conversation_history)
+        # response_text = generate_response(transcript, mood, conversation_history)
+        # print(f"Response: {response_text}")
+
+        # Generate personalized response
+        response_text = response_generator.generate_personalized_response(transcript, mood, conversation_history)
         print(f"Response: {response_text}")
         
         # Complete the exchange record
@@ -313,6 +321,10 @@ def process_audio():
         
         # Convert response to speech
         speech_file_path = text_to_speech(response_text, mood)
+
+        ### playback the speech file
+        play_audio_file(speech_file_path)
+
         
         # Create a URL for the audio file
         if speech_file_path:
@@ -320,12 +332,23 @@ def process_audio():
         else:
             speech_url = None
         
+
+        # Generate voice improvement tips if appropriate
+        voice_tips = []
+        if len(mood_history) > 2:
+            # Only generate tips after a few exchanges
+            acoustic_features = mood_detector.extract_acoustic_features(temp_path)
+            if mood['valence'] < 5 or mood['arousal'] > 7 or mood['arousal'] < 3:
+                voice_tips = response_generator.get_voice_improvement_suggestions(mood, acoustic_features)
+        
+
         # Return all the processed data
         return jsonify({
             "transcript": transcript,
             "mood": mood,
             "response": response_text,
-            "audio_url": speech_url
+            "audio_url": speech_url,
+            "voice_tips": voice_tips if voice_tips else []
         })
         
     except Exception as e:
@@ -338,6 +361,47 @@ def process_audio():
                 os.remove(temp_path)
             except:
                 pass
+
+
+@app.route('/mood_history', methods=['GET'])
+def get_mood_history():
+    """Return the mood history for visualization/tracking"""
+    history_data = []
+    
+    for i, mood in enumerate(mood_history):
+        history_data.append({
+            'exchange_number': i + 1,
+            'valence': mood['valence'],
+            'arousal': mood['arousal'],
+            'primary_emotion': mood['primary_emotion']
+        })
+    
+    return jsonify(history_data)
+
+@app.route('/voice_tips', methods=['GET'])
+def get_voice_tips():
+    """Get specific voice improvement tips"""
+    if not mood_history:
+        return jsonify({"error": "No mood data available yet"}), 400
+    
+    # Get the most recent mood
+    latest_mood = mood_history[-1]
+    
+    # Get the most recent audio file
+    temp_path = "temp_upload.wav"
+    if not os.path.exists(temp_path):
+        return jsonify({"error": "No recent audio available"}), 400
+    
+    # Extract acoustic features
+    acoustic_features = mood_detector.extract_acoustic_features(temp_path)
+    
+    # Generate tips
+    tips = response_generator.get_voice_improvement_suggestions(latest_mood, acoustic_features)
+    
+    return jsonify({
+        "current_mood": latest_mood,
+        "voice_tips": tips
+    })
 
 if __name__ == '__main__':
     app.run(debug=True)

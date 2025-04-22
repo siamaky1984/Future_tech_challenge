@@ -280,8 +280,40 @@
                     
                     // Play the audio response if available
                     if (data.audio_url) {
-                        new Audio(data.audio_url).play();
+                        //new Audio(data.audio_url).play();
+                        logDebug(`Playing audio from: ${data.audio_url}`);
+                        // Create and play audio with proper error handling
+                        const audio = new Audio(data.audio_url);
+                        
+                        // Log when audio starts playing
+                        audio.onplay = () => {
+                        logDebug("Audio started playing");
+                        };
+
+                        // Log if there's an error
+                        audio.onerror = (e) => {
+                            logDebug(`Audio error: ${e}`);
+                            console.error("Audio playback error:", e);
+                        };
+
+                        // Attempt to play the audio
+                        const playPromise = audio.play();
+
+                        // Handle play promise (required for some browsers)
+                        if (playPromise !== undefined) {
+                            playPromise
+                                .then(() => {
+                                    logDebug("Audio playback started successfully");
+                                })
+                                .catch(error => {
+                                    logDebug(`Audio playback failed: ${error}`);
+                                    console.error("Audio playback failed:", error);
+                                });
+                        }
+                    } else {
+                    logDebug("No audio URL received from server");
                     }
+                    
                     
                     // Re-enable the record button
                     recordButton.disabled = false;

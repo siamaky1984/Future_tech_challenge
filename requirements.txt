@@ -1,4 +1,7 @@
 numpy
 scipy
 librosa
+playaudio
+flask
+json
 
