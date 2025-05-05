@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mood-Improving Voice Chatbot</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -100,6 +101,16 @@
             font-size: 0.9rem;
             color: #666;
         }
+        .debug-info {
+            margin-top: 1rem;
+            padding: 1rem;
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 0.85rem;
+            display: none;
+        }
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
@@ -126,6 +137,50 @@
             transition: width 0.5s;
             background: linear-gradient(to right, #ff5252, #ffb142, #23d160);
             width: 50%;
+        }
+        .debug-toggle {
+            text-align: center;
+            margin-top: 0.5rem;
+            font-size: 0.8rem;
+            color: #999;
+            cursor: pointer;
+        }
+        .feature-button {
+            padding: 0.5rem 1rem;
+            margin: 0.5rem;
+            background-color: #6c63ff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .feature-button:hover {
+            background-color: #5a52d5;
+        }
+        .data-container {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+            display: none;
+        }
+        .data-container h3 {
+            color: #6c63ff;
+            margin-bottom: 1rem;
+            font-size: 1.2rem;
+        }
+        .data-container ul {
+            padding-left: 1.5rem;
+        }
+        .data-container li {
+            margin-bottom: 0.5rem;
+        }
+        .chart-container {
+            height: 300px;
+            margin-top: 1rem;
         }
     </style>
 </head>
@@ -164,6 +219,32 @@
                         </div>
                     </div>
                 </div>
+                
+                <!-- Feature buttons -->
+                <div class="text-center mt-4">
+                    <button id="show-mood-history" class="feature-button">View Mood History</button>
+                    <button id="show-voice-tips" class="feature-button">Get Voice Tips</button>
+                </div>
+                
+                <!-- Mood history container -->
+                <div id="mood-history-container" class="data-container">
+                    <h3>Mood History</h3>
+                    <div id="mood-chart-container" class="chart-container">
+                        <canvas id="mood-chart"></canvas>
+                    </div>
+                    <div id="mood-list-container"></div>
+                </div>
+                
+                <!-- Voice tips container -->
+                <div id="voice-tips-container" class="data-container">
+                    <h3>Voice Improvement Tips</h3>
+                    <div id="tips-list-container">
+                        <p>No voice tips available yet. Try recording more speech first.</p>
+                    </div>
+                </div>
+                
+                <div class="debug-toggle" id="debug-toggle">Show debug info</div>
+                <div class="debug-info" id="debug-info"></div>
             </div>
         </div>
     </div>
@@ -176,10 +257,215 @@
             const chatMessages = document.getElementById('chat-messages');
             const moodIndicator = document.getElementById('mood-indicator');
             const moodProgress = document.getElementById('mood-progress');
+            const debugInfo = document.getElementById('debug-info');
+            const debugToggle = document.getElementById('debug-toggle');
+            
+            // Feature elements
+            const showMoodHistoryBtn = document.getElementById('show-mood-history');
+            const showVoiceTipsBtn = document.getElementById('show-voice-tips');
+            const moodHistoryContainer = document.getElementById('mood-history-container');
+            const voiceTipsContainer = document.getElementById('voice-tips-container');
+            const moodListContainer = document.getElementById('mood-list-container');
+            const tipsListContainer = document.getElementById('tips-list-container');
             
             let isRecording = false;
             let mediaRecorder;
             let audioChunks = [];
+            let moodHistoryChart = null;
+            
+            // Toggle debug info
+            debugToggle.addEventListener('click', function() {
+                if (debugInfo.style.display === 'none' || debugInfo.style.display === '') {
+                    debugInfo.style.display = 'block';
+                    debugToggle.textContent = 'Hide debug info';
+                } else {
+                    debugInfo.style.display = 'none';
+                    debugToggle.textContent = 'Show debug info';
+                }
+            });
+            
+            // Feature button event listeners
+            showMoodHistoryBtn.addEventListener('click', function() {
+                fetchMoodHistory();
+                
+                // Toggle visibility
+                moodHistoryContainer.style.display = 
+                    moodHistoryContainer.style.display === 'none' || 
+                    moodHistoryContainer.style.display === '' ? 'block' : 'none';
+                
+                // Hide voice tips if mood history is shown
+                if (moodHistoryContainer.style.display === 'block') {
+                    voiceTipsContainer.style.display = 'none';
+                }
+            });
+            
+            showVoiceTipsBtn.addEventListener('click', function() {
+                fetchVoiceTips();
+                
+                // Toggle visibility
+                voiceTipsContainer.style.display = 
+                    voiceTipsContainer.style.display === 'none' || 
+                    voiceTipsContainer.style.display === '' ? 'block' : 'none';
+                
+                // Hide mood history if voice tips is shown
+                if (voiceTipsContainer.style.display === 'block') {
+                    moodHistoryContainer.style.display = 'none';
+                }
+            });
+            
+            // Function to fetch mood history
+            function fetchMoodHistory() {
+                logDebug("Fetching mood history...");
+                
+                fetch('/mood_history')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        logDebug(`Received mood history: ${JSON.stringify(data)}`);
+                        displayMoodHistory(data);
+                    })
+                    .catch(error => {
+                        logDebug(`Error fetching mood history: ${error}`);
+                        moodListContainer.innerHTML = `<p class="text-danger">Error loading mood history: ${error.message}</p>`;
+                    });
+            }
+            
+            // Function to fetch voice tips
+            function fetchVoiceTips() {
+                logDebug("Fetching voice tips...");
+                
+                fetch('/voice_tips')
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        logDebug(`Received voice tips: ${JSON.stringify(data)}`);
+                        displayVoiceTips(data.voice_tips);
+                    })
+                    .catch(error => {
+                        logDebug(`Error fetching voice tips: ${error}`);
+                        tipsListContainer.innerHTML = `<p class="text-danger">Error loading voice tips: ${error.message}</p>`;
+                    });
+            }
+            
+            // Function to display mood history
+            function displayMoodHistory(historyData) {
+                // Display as a chart
+                displayMoodHistoryChart(historyData);
+                
+                // Also display as a list
+                moodListContainer.innerHTML = '';
+                
+                if (historyData.length === 0) {
+                    moodListContainer.innerHTML = '<p>No mood history available yet. Try having a conversation first.</p>';
+                    return;
+                }
+                
+                // Create a list of moods
+                const historyList = document.createElement('ul');
+                
+                historyData.forEach(entry => {
+                    const listItem = document.createElement('li');
+                    listItem.innerHTML = `Exchange ${entry.exchange_number}: <strong>${entry.primary_emotion}</strong> 
+                                         (Positivity: ${entry.valence.toFixed(1)}/10, 
+                                         Energy: ${entry.arousal.toFixed(1)}/10)`;
+                    historyList.appendChild(listItem);
+                });
+                
+                moodListContainer.appendChild(historyList);
+            }
+            
+            // Function to display mood history as a chart
+            function displayMoodHistoryChart(historyData) {
+                if (historyData.length === 0) {
+                    return;
+                }
+                
+                const ctx = document.getElementById('mood-chart').getContext('2d');
+                
+                // Destroy existing chart if it exists
+                if (moodHistoryChart) {
+                    moodHistoryChart.destroy();
+                }
+                
+                // Extract data for the chart
+                const labels = historyData.map(entry => `Exchange ${entry.exchange_number}`);
+                const valenceData = historyData.map(entry => entry.valence);
+                const arousalData = historyData.map(entry => entry.arousal);
+                
+                // Create the chart
+                moodHistoryChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Positivity (Valence)',
+                                data: valenceData,
+                                borderColor: 'rgba(75, 192, 192, 1)',
+                                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                                tension: 0.3
+                            },
+                            {
+                                label: 'Energy (Arousal)',
+                                data: arousalData,
+                                borderColor: 'rgba(255, 159, 64, 1)',
+                                backgroundColor: 'rgba(255, 159, 64, 0.2)',
+                                tension: 0.3
+                            }
+                        ]
+                    },
+                    options: {
+                        scales: {
+                            y: {
+                                min: 0,
+                                max: 10,
+                                title: {
+                                    display: true,
+                                    text: 'Score (1-10)'
+                                }
+                            }
+                        },
+                        responsive: true,
+                        maintainAspectRatio: false
+                    }
+                });
+            }
+            
+            // Function to display voice tips
+            function displayVoiceTips(tips) {
+                tipsListContainer.innerHTML = '';
+                
+                if (!tips || tips.length === 0) {
+                    tipsListContainer.innerHTML = '<p>No voice tips available yet. Try recording more speech first.</p>';
+                    return;
+                }
+                
+                // Create a list of tips
+                const tipsList = document.createElement('ul');
+                
+                tips.forEach(tip => {
+                    const listItem = document.createElement('li');
+                    listItem.textContent = tip;
+                    tipsList.appendChild(listItem);
+                });
+                
+                tipsListContainer.appendChild(tipsList);
+            }
+            
+            // Log debug info
+            function logDebug(message) {
+                const timestamp = new Date().toISOString().substr(11, 8);
+                debugInfo.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+                debugInfo.scrollTop = debugInfo.scrollHeight;
+            }
             
             // Request microphone access
             recordButton.addEventListener('click', function() {
@@ -202,29 +488,35 @@
                             Recording...
                         `;
                         statusText.textContent = "Listening...";
+                        logDebug("Recording started");
                         
+                        audioChunks = [];
                         mediaRecorder = new MediaRecorder(stream);
-                        mediaRecorder.start();
                         
                         mediaRecorder.addEventListener("dataavailable", event => {
                             audioChunks.push(event.data);
                         });
                         
                         mediaRecorder.addEventListener("stop", () => {
+                            logDebug(`Recording stopped. Collected ${audioChunks.length} chunks.`);
                             const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                            logDebug(`Created audio blob: ${Math.round(audioBlob.size / 1024)} KB`);
                             processAudio(audioBlob);
-                            audioChunks = [];
                         });
                         
-                        // Auto-stop after 10 seconds (this is configurable)
+                        mediaRecorder.start();
+                        
+                        // Auto-stop after 10 seconds
                         setTimeout(() => {
                             if (isRecording) {
+                                logDebug("Auto-stopping after timeout");
                                 stopRecording();
                             }
                         }, 10000);
                     })
                     .catch(error => {
                         console.error('Error accessing microphone:', error);
+                        logDebug(`Microphone error: ${error.message}`);
                         statusText.textContent = "Error: Microphone access denied";
                     });
             }
@@ -246,100 +538,118 @@
                 }
             }
             
-
-            // Replace the simulated processAudio function with this real implementation
             function processAudio(audioBlob) {
-                // Create a FormData object to send the audio file
-                const formData = new FormData();
-                formData.append('audio', audioBlob, 'recording.wav');
+                logDebug("Converting audio to base64...");
                 
-                // Disable record button during processing
-                recordButton.disabled = true;
-                statusText.textContent = "Processing your speech...";
-                
-                // Send the audio file to your Flask backend
-                fetch('/process_audio', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Network response was not ok');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    // Add the user's message
-                    addMessage(data.transcript, 'user');
+                // Convert to base64
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                    const base64Audio = reader.result;
+                    logDebug(`Base64 conversion complete: ${base64Audio.substring(0, 50)}...`);
                     
-                    // Update the mood display
-                    updateMoodDisplay(data.mood);
+                    // Create FormData
+                    const formData = new FormData();
+                    formData.append('audio_data', base64Audio);
                     
-                    // Add the bot's response
-                    addMessage(data.response, 'bot');
+                    logDebug("Sending audio to server...");
                     
-                    // Play the audio response if available
-                    if (data.audio_url) {
-                        //new Audio(data.audio_url).play();
-                        logDebug(`Playing audio from: ${data.audio_url}`);
-                        // Create and play audio with proper error handling
-                        const audio = new Audio(data.audio_url);
-                        
-                        // Log when audio starts playing
-                        audio.onplay = () => {
-                        logDebug("Audio started playing");
-                        };
-
-                        // Log if there's an error
-                        audio.onerror = (e) => {
-                            logDebug(`Audio error: ${e}`);
-                            console.error("Audio playback error:", e);
-                        };
-
-                        // Attempt to play the audio
-                        const playPromise = audio.play();
-
-                        // Handle play promise (required for some browsers)
-                        if (playPromise !== undefined) {
-                            playPromise
-                                .then(() => {
-                                    logDebug("Audio playback started successfully");
-                                })
-                                .catch(error => {
-                                    logDebug(`Audio playback failed: ${error}`);
-                                    console.error("Audio playback failed:", error);
-                                });
+                    // Send to server
+                    fetch('/process_audio', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    .then(response => {
+                        logDebug(`Server response status: ${response.status}`);
+                        if (!response.ok) {
+                            throw new Error(`Server returned ${response.status}: ${response.statusText}`);
                         }
-                    } else {
-                    logDebug("No audio URL received from server");
-                    }
-                    
-                    
-                    // Re-enable the record button
-                    recordButton.disabled = false;
-                    recordButton.innerHTML = `
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-mic me-2" viewBox="0 0 16 16">
-                            <path d="M3.5 6.5A.5.5 0 0 1 4 7v1a4 4 0 0 0 8 0V7a.5.5 0 0 1 1 0v1a5 5 0 0 1-4.5 4.975V15h3a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1h3v-2.025A5 5 0 0 1 3 8V7a.5.5 0 0 1 .5-.5z"/>
-                            <path d="M10 8a2 2 0 1 1-4 0V3a2 2 0 1 1 4 0v5zM8 0a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V3a3 3 0 0 0-3-3z"/>
-                        </svg>
-                        Press to speak
-                    `;
-                    statusText.textContent = "Ready to listen";
-                })
-                .catch(error => {
-                    console.error('Error processing audio:', error);
-                    statusText.textContent = "Error processing audio. Please try again.";
-                    
-                    // Re-enable the record button
-                    recordButton.disabled = false;
-                    recordButton.innerHTML = `
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-mic me-2" viewBox="0 0 16 16">
-                            <path d="M3.5 6.5A.5.5 0 0 1 4 7v1a4 4 0 0 0 8 0V7a.5.5 0 0 1 1 0v1a5 5 0 0 1-4.5 4.975V15h3a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1h3v-2.025A5 5 0 0 1 3 8V7a.5.5 0 0 1 .5-.5z"/>
-                            <path d="M10 8a2 2 0 1 1-4 0V3a2 2 0 1 1 4 0v5zM8 0a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V3a3 3 0 0 0-3-3z"/>
-                        </svg>
-                        Press to speak
-                    `;
-                });
+                        return response.json();
+                    })
+                    .then(data => {
+                        logDebug(`Response received: ${JSON.stringify(data, null, 2)}`);
+                        
+                        if (data.error) {
+                            throw new Error(data.error);
+                        }
+                        
+                        // Add the user's message
+                        addMessage(data.transcript, 'user');
+                        
+                        // Update the mood display
+                        updateMoodDisplay(data.mood);
+                        
+                        // Add the bot's response
+                        addMessage(data.response, 'bot');
+                        
+                        // Display voice tips if provided
+                        if (data.voice_tips && data.voice_tips.length > 0) {
+                            displayVoiceTips(data.voice_tips);
+                        }
+                        
+                        // Play the audio response if available
+                        if (data.audio_url) {
+                            logDebug(`Playing audio from: ${data.audio_url}`);
+                            
+                            // Create and play audio with proper error handling
+                            const audio = new Audio(data.audio_url);
+                            
+                            // Log when audio starts playing
+                            audio.onplay = () => {
+                                logDebug("Audio started playing");
+                            };
+                            
+                            // Log if there's an error
+                            audio.onerror = (e) => {
+                                logDebug(`Audio error: ${e}`);
+                                console.error("Audio playback error:", e);
+                            };
+                            
+                            // Attempt to play the audio
+                            const playPromise = audio.play();
+                            
+                            // Handle play promise (required for some browsers)
+                            if (playPromise !== undefined) {
+                                playPromise
+                                    .then(() => {
+                                        logDebug("Audio playback started successfully");
+                                    })
+                                    .catch(error => {
+                                        logDebug(`Audio playback failed: ${error}`);
+                                        console.error("Audio playback failed:", error);
+                                    });
+                            }
+                        } else {
+                            logDebug("No audio URL received from server");
+                        }
+                        
+                        // Re-enable the record button
+                        recordButton.disabled = false;
+                        recordButton.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-mic me-2" viewBox="0 0 16 16">
+                                <path d="M3.5 6.5A.5.5 0 0 1 4 7v1a4 4 0 0 0 8 0V7a.5.5 0 0 1 1 0v1a5 5 0 0 1-4.5 4.975V15h3a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1h3v-2.025A5 5 0 0 1 3 8V7a.5.5 0 0 1 .5-.5z"/>
+                                <path d="M10 8a2 2 0 1 1-4 0V3a2 2 0 1 1 4 0v5zM8 0a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V3a3 3 0 0 0-3-3z"/>
+                            </svg>
+                            Press to speak
+                        `;
+                        statusText.textContent = "Ready to listen";
+                    })
+                    .catch(error => {
+                        console.error('Error processing audio:', error);
+                        logDebug(`Error: ${error.message}`);
+                        statusText.textContent = "Error processing audio. Please try again.";
+                        
+                        // Re-enable the record button
+                        recordButton.disabled = false;
+                        recordButton.innerHTML = `
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-mic me-2" viewBox="0 0 16 16">
+                                <path d="M3.5 6.5A.5.5 0 0 1 4 7v1a4 4 0 0 0 8 0V7a.5.5 0 0 1 1 0v1a5 5 0 0 1-4.5 4.975V15h3a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1h3v-2.025A5 5 0 0 1 3 8V7a.5.5 0 0 1 .5-.5z"/>
+                                <path d="M10 8a2 2 0 1 1-4 0V3a2 2 0 1 1 4 0v5zM8 0a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V3a3 3 0 0 0-3-3z"/>
+                            </svg>
+                            Press to speak
+                        `;
+                    });
+                };
+                reader.readAsDataURL(audioBlob);
             }
             
             function addMessage(text, sender) {
@@ -365,7 +675,8 @@
                     'neutral': '😐',
                     'surprised': '😲',
                     'excited': '😃',
-                    'fearful': '😨'
+                    'fearful': '😨',
+                    'confused': '🤔'
                 };
                 
                 // Get emoji or default

@@ -1,5 +1,6 @@
 import os
 import time
+from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 import requests
 import json
@@ -7,7 +8,6 @@ import base64
 from flask import Flask, render_template, request, jsonify, url_for
 
 from text_to_speech_openai import play_audio_file
-
 
 # Import our custom modules
 from mood_detector import MoodDetector
@@ -23,19 +23,27 @@ API_KEY = ""
 mood_detector = MoodDetector(API_KEY)
 response_generator = ResponseGenerator(API_KEY)
 
-
 # Make sure static folder exists
 if not os.path.exists('static'):
     os.makedirs('static')
 
 # Initialize conversation history
-conversation_history = []
-mood_history = []
+conversation_history: List[Dict[str, str]] = []
+mood_history: List[Dict[str, Any]] = []
 
-# Add this audio preprocessing function before sending to Whisper
-def preprocess_audio(input_file, output_file):
+def preprocess_audio(input_file: str, output_file: str) -> str:
+    """
+    Preprocess audio file for better compatibility with the speech recognition system.
+    
+    Args:
+        input_file: Path to the input audio file
+        output_file: Path to save the processed audio file
+        
+    Returns:
+        str: Path to the processed file, or the original if processing failed
+    """
     try:
-        # Using ffmpeg (you'll need to install it)
+        # Using ffmpeg to convert audio to 16kHz, mono, 16-bit PCM format
         os.system(f'ffmpeg -i {input_file} -ar 16000 -ac 1 -c:a pcm_s16le {output_file}')
         return output_file
     except Exception as e:
@@ -43,10 +51,16 @@ def preprocess_audio(input_file, output_file):
         return input_file  # Return original if processing fails
 
 
-
-def speech_to_text(audio_file_path, api_key):
+def speech_to_text(audio_file_path: str, api_key: str) -> str:
     """
-    Directly call the OpenAI Whisper API without relying on SDK abstractions
+    Convert speech to text using OpenAI's Whisper API.
+    
+    Args:
+        audio_file_path: Path to the audio file
+        api_key: OpenAI API key
+        
+    Returns:
+        str: Transcribed text or error message
     """
     try:
         # API endpoint
@@ -86,12 +100,20 @@ def speech_to_text(audio_file_path, api_key):
         return f"Error: {str(e)}"
 
 
-# Simplified mood detection (since we're focusing on the API integration)
-def detect_mood(audio_file_path, transcript):
+def detect_mood(audio_file_path: str, transcript: str) -> Dict[str, Any]:
+    """
+    Simple mood detection based on transcript keywords.
+    
+    Args:
+        audio_file_path: Path to the audio file
+        transcript: Transcribed text from the audio
+        
+    Returns:
+        Dict: Detected mood with valence, arousal, and primary emotion
+    """
     # Simplified version for testing API integration
     # In a real implementation, you would use librosa or another library
     
-    # For now, we'll use a simple sentiment analysis based on the transcript
     sentiment_score = 5  # Neutral default
     
     # Very simple keyword detection (just for demonstration)
@@ -127,8 +149,20 @@ def detect_mood(audio_file_path, transcript):
     
     return mood
 
-# Direct implementation of GPT API for chat
-def generate_response(transcript, mood, conversation_history):
+
+def generate_response(transcript: str, mood: Dict[str, Any], 
+                     conversation_history: List[Dict[str, str]]) -> str:
+    """
+    Generate a response using OpenAI's GPT model based on the transcript and detected mood.
+    
+    Args:
+        transcript: User's transcribed speech
+        mood: Detected mood information
+        conversation_history: Previous conversation exchanges
+        
+    Returns:
+        str: Generated response text
+    """
     try:
         # API endpoint
         url = "https://api.openai.com/v1/chat/completions"
@@ -187,8 +221,18 @@ def generate_response(transcript, mood, conversation_history):
         print(f"Error generating response: {str(e)}")
         return "I'm having trouble processing that right now. Could you please try again?"
 
-# Direct implementation of TTS API
-def text_to_speech(text, mood=None):
+
+def text_to_speech(text: str, mood: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """
+    Convert text to speech using OpenAI's TTS API.
+    
+    Args:
+        text: Text to convert to speech
+        mood: Detected mood information to adjust voice selection
+        
+    Returns:
+        Optional[str]: Path to the generated audio file or None if failed
+    """
     try:
         # API endpoint
         url = "https://api.openai.com/v1/audio/speech"
@@ -210,7 +254,7 @@ def text_to_speech(text, mood=None):
         
         # Prepare request data
         data = {
-            "model": "tts-1", # "tts-1",
+            "model": "tts-1",
             "voice": voice,
             "input": text
         }
@@ -225,17 +269,18 @@ def text_to_speech(text, mood=None):
             with open(speech_file, "wb") as file:
                 file.write(response.content)
             
+            # After saving the file, verify it exists and log the size
+            if os.path.exists(speech_file):
+                file_size = os.path.getsize(speech_file)
+                print(f"TTS file created successfully: {speech_file}, size: {file_size} bytes")
+            else:
+                print(f"TTS file was not created: {speech_file}")
+                return None
+                
             return speech_file
         else:
             print(f"TTS API error: {response.status_code}, {response.text}")
             return None
-        
-        # After saving the file, verify it exists and log the size
-        if os.path.exists(speech_file):
-            file_size = os.path.getsize(speech_file)
-            print(f"TTS file created successfully: {speech_file}, size: {file_size} bytes")
-        else:
-            print(f"TTS file was not created: {speech_file}")
     
     except Exception as e:
         print(f"Error in text-to-speech: {str(e)}")
@@ -244,10 +289,16 @@ def text_to_speech(text, mood=None):
 # Flask routes
 @app.route('/')
 def index():
+    """Render the main application page."""
     return render_template('index.html')
+
 
 @app.route('/process_audio', methods=['POST'])
 def process_audio():
+    """
+    Process uploaded audio: convert speech to text, detect mood, 
+    generate response, and convert response to speech.
+    """
     print("Audio processing request received")
     
     if 'audio' not in request.files and 'audio_data' not in request.form:
@@ -279,11 +330,11 @@ def process_audio():
             print(f"Saved decoded base64 data to {temp_path}")
         
         print('old temp_path', temp_path)
-        ### convert the temp file for the format of interest
+        # Convert the temp file for the format of interest
         output_path = './temp_upload_converted.wav'
         if os.path.exists(output_path):
             os.remove(output_path)
-        temp_path = preprocess_audio( temp_path, output_path)
+        temp_path = preprocess_audio(temp_path, output_path)
         print('new temp path', temp_path)
 
         # Process the audio
@@ -292,10 +343,6 @@ def process_audio():
         
         if transcript.startswith("Error:"):
             return jsonify({"error": transcript}), 500
-        
-        # Detect mood
-        # mood = detect_mood(temp_path, transcript)
-        # print(f"Detected mood: {mood}")
         
         # Detect mood using our advanced mood detector
         mood = mood_detector.detect_mood(temp_path, transcript)
@@ -307,10 +354,6 @@ def process_audio():
         # Update conversation history
         current_exchange = {"user": transcript}
         
-        # Generate response
-        # response_text = generate_response(transcript, mood, conversation_history)
-        # print(f"Response: {response_text}")
-
         # Generate personalized response
         response_text = response_generator.generate_personalized_response(transcript, mood, conversation_history)
         print(f"Response: {response_text}")
@@ -322,9 +365,8 @@ def process_audio():
         # Convert response to speech
         speech_file_path = text_to_speech(response_text, mood)
 
-        ### playback the speech file
+        # Playback the speech file
         play_audio_file(speech_file_path)
-
         
         # Create a URL for the audio file
         if speech_file_path:
@@ -332,7 +374,6 @@ def process_audio():
         else:
             speech_url = None
         
-
         # Generate voice improvement tips if appropriate
         voice_tips = []
         if len(mood_history) > 2:
@@ -341,7 +382,6 @@ def process_audio():
             if mood['valence'] < 5 or mood['arousal'] > 7 or mood['arousal'] < 3:
                 voice_tips = response_generator.get_voice_improvement_suggestions(mood, acoustic_features)
         
-
         # Return all the processed data
         return jsonify({
             "transcript": transcript,
@@ -365,7 +405,7 @@ def process_audio():
 
 @app.route('/mood_history', methods=['GET'])
 def get_mood_history():
-    """Return the mood history for visualization/tracking"""
+    """Return the mood history for visualization/tracking."""
     history_data = []
     
     for i, mood in enumerate(mood_history):
@@ -378,9 +418,10 @@ def get_mood_history():
     
     return jsonify(history_data)
 
+
 @app.route('/voice_tips', methods=['GET'])
 def get_voice_tips():
-    """Get specific voice improvement tips"""
+    """Get specific voice improvement tips based on recent audio."""
     if not mood_history:
         return jsonify({"error": "No mood data available yet"}), 400
     
@@ -402,6 +443,7 @@ def get_voice_tips():
         "current_mood": latest_mood,
         "voice_tips": tips
     })
+
 
 if __name__ == '__main__':
     app.run(debug=True)
